@@ -160,7 +160,17 @@ _For more examples, please refer to the [Documentation](https://example.com)_
 <!-- Backlog -->
 ## Backlog
 
-- [ ] Add baseline autoencoder MLP implementation in PTL
+### Rohit
+- [ ] Formulate the problem: can we treat it as time series? [explore LSTM baseline approach]
+- [ ] Define if we need a separate model for each investment_id (placeholder result: discarded)
+- [ ] Need to find groups b/w investment_id's
+
+### Parth
+- [ ] Create folder structure for the repo (model, data, notebooks/train.ipynb, train.py)
+- [ ] Mean and std comparison on the target variable across investment_id's
+- [ ] Plot temporal variation of target value across investment_id's 
+- [ ] Define a validation schedule and use it across model training (5-folds at least)
+- [ ] Add baseline autoencoder-MLP implementation in PTL
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 
