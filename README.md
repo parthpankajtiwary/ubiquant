@@ -155,7 +155,12 @@ _For more examples, please refer to the [Documentation](https://example.com)_
 - [ ] Add model training pipeline
 - [ ] Add a backlog of potential ideas for improvement (over baseline)
 
-See the [open issues](https://github.com/othneildrew/Best-README-Template/issues) for a full list of proposed features (and known issues).
+<p align="right">(<a href="#top">back to top</a>)</p>
+
+<!-- Backlog -->
+## Backlog
+
+- [ ] Add baseline autoencoder MLP implementation in PTL
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 
