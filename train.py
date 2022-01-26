@@ -31,16 +31,39 @@ def weighted_average(a):
         w.append(1 / (2**(n + 1 - j)))
     return np.average(a, weights = w)
 
+class UbiquantData(Dataset):
+    def __init__(self, data: pd.core.frame.DataFrame):
+        self.target = data[['target']].values
+        self.data = data.drop(['row_id', 'time_id', 'investment_id', 'target'], axis=1).values
+        self.investment_ids = data.investment_id.values
+
+    def __getitem__(self, idx):
+        x_cont = self.data[idx]
+        target = self.target[idx]
+        x_cat = self.investment_ids[idx]
+        return torch.tensor(x_cont).float(), x_cat, torch.tensor(target).float()
+
+    def __len__(self):
+        return len(self.data)
+
 class UbiquantModel(pl.LightningModule):
     def __init__(self):
         super(UbiquantModel, self).__init__()
-        self.fc1 = nn.Linear(300, 512)
+        self.emb = nn.Embedding(3774, 64)
+        self.emb_drop = nn.Dropout(0.1)
+        self.bn1 = nn.BatchNorm1d(300)
+        self.fc1 = nn.Linear(64+300, 512)
         self.fc2 = nn.Linear(512, 128)
         self.fc3 = nn.Linear(128, 64)
         self.fc4 = nn.Linear(64, 32)
         self.fc5 = nn.Linear(32, 1)
 
-    def forward(self, x):
+    def forward(self, x_cont, x_cat):
+        x1 = self.emb(x_cat)
+        x1 = self.emb_drop(x1)
+
+        x = torch.cat([x1, x_cont], 1)
+
         x = swish(self.fc1(x))
         x = swish(self.fc2(x))
         x = swish(self.fc3(x))
@@ -49,31 +72,29 @@ class UbiquantModel(pl.LightningModule):
         return x
 
     def train_dataloader(self):
-        train_dataset = TensorDataset(torch.tensor(train_features.values).float(),
-                                      torch.tensor(train_targets[['target']].values).float())
+        train_dataset = UbiquantData(train_data)
         train_loader = DataLoader(dataset=train_dataset, batch_size=4096)
         return train_loader
 
     def val_dataloader(self):
-        validation_dataset = TensorDataset(torch.tensor(validation_features.values).float(),
-                                           torch.tensor(validation_targets[['target']].values).float())
-        validation_loader = DataLoader(dataset=validation_dataset, batch_size=4096)
-        return validation_loader
+        val_dataset = UbiquantData(val_data)
+        val_loader = DataLoader(dataset=val_dataset, batch_size=4096)
+        return val_loader
 
     def configure_optimizers(self):
         return optim.Adam(self.parameters(), lr=l_rate)
 
     def training_step(self, batch, batch_idx):
-        x, y = batch
-        logits = self.forward(x)
+        x_cont, x_cat, y = batch
+        logits = self.forward(x_cont, x_cat)
         loss = mse_loss(logits, y)
         logs = {'loss': loss}
         return {'loss': loss, 'log': logs}
 
     def validation_step(self, batch, batch_idx):
-        x, y = batch
+        x_cont, x_cat, y = batch
         scores_df = pd.DataFrame(index=range(len(y)), columns=['targets', 'preds'])
-        logits = self.forward(x)
+        logits = self.forward(x_cont, x_cat)
         scores_df.targets = y.cpu().numpy()
         scores_df.preds = logits.cpu().numpy()
         pearson = scores_df['targets'].corr(scores_df['preds'])
@@ -106,11 +127,7 @@ if __name__ == '__main__':
         target_fields = ['target']
 
         train_data = df.iloc[fold_indexes[fold]['train']]
-        validation_data = df.iloc[fold_indexes[fold]['test']]
-
-        train_features, train_targets = train_data.drop(remove_fields, axis=1), train_data[target_fields]
-        validation_features, validation_targets = validation_data.drop(remove_fields, axis=1), validation_data[
-            target_fields]
+        val_data = df.iloc[fold_indexes[fold]['test']]
 
         checkpoint_callback = ModelCheckpoint(
             monitor="pearson",
