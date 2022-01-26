@@ -8,11 +8,15 @@ import torch.nn as nn
 from torch.utils.data import Dataset, TensorDataset, DataLoader
 import pytorch_lightning as pl
 from pytorch_lightning import Trainer
+from pytorch_lightning.callbacks import ModelCheckpoint
 
 import warnings
 warnings.filterwarnings("ignore")
 
-epochs = 10
+import os
+os.environ['KMP_DUPLICATE_LIB_OK']='True'
+
+epochs = 5
 l_rate = 1e-3
 mse_loss = nn.MSELoss()
 
@@ -70,26 +74,29 @@ class UbiquantModel(pl.LightningModule):
         x, y = batch
         scores_df = pd.DataFrame(index=range(len(y)), columns=['targets', 'preds'])
         logits = self.forward(x)
-        scores_df.targets = y.numpy()
-        scores_df.preds = logits.numpy()
+        scores_df.targets = y.cpu().numpy()
+        scores_df.preds = logits.cpu().numpy()
         pearson = scores_df['targets'].corr(scores_df['preds'])
         pearson = np.array(pearson)
         pearson = torch.from_numpy(pearson)
+        self.log('pearson', pearson)
         return {'val_loss': pearson}
 
     def validation_epoch_end(self, outputs):
         avg_loss = torch.stack([x['val_loss'] for x in outputs]).mean()
         print('mean pearson correlation on validation set: ', avg_loss)
-        if fold not in scores and avg_loss > 0.05:
-            scores[fold] = avg_loss
-        elif avg_loss > 0.05:
-            scores[fold] += avg_loss
+        if fold not in scores:
+            scores[fold] = [avg_loss]
+        else:
+            scores[fold].append(avg_loss)
         tensorboard_logs = {'val_loss': avg_loss}
         return {'avg_val_loss': avg_loss, 'log': tensorboard_logs}
 
 if __name__ == '__main__':
     scores = dict()
     df = pd.read_csv('input/train.csv')
+
+    print('data loaded...')
 
     with open('input/folds.pickle', 'rb') as handle:
         fold_indexes = pickle.load(handle)
@@ -105,12 +112,23 @@ if __name__ == '__main__':
         validation_features, validation_targets = validation_data.drop(remove_fields, axis=1), validation_data[
             target_fields]
 
+        checkpoint_callback = ModelCheckpoint(
+            monitor="pearson",
+            dirpath="models",
+            filename="fold-" + str(fold) + "-ubiquant-mlp-{epoch:02d}-{val_loss:.2f}",
+            save_top_k=1,
+            mode="max",
+        )
+
         model = UbiquantModel()
-        trainer = Trainer(max_epochs=epochs, fast_dev_run=False)
+        trainer = Trainer(max_epochs=epochs,
+                          fast_dev_run=False,
+                          callbacks=[checkpoint_callback],
+                          gpus=1)
         trainer.fit(model)
 
     score_list = list()
     for fold in scores:
-        score_list.append(scores[fold]/epochs)
+        score_list.append(max(scores[fold]))
 
     print('final weighted correlation for the experiment: ', weighted_average(score_list))
