@@ -16,7 +16,7 @@ warnings.filterwarnings("ignore")
 import os
 os.environ['KMP_DUPLICATE_LIB_OK']='True'
 
-epochs = 5
+epochs = 20
 l_rate = 1e-3
 mse_loss = nn.MSELoss()
 
@@ -126,8 +126,8 @@ if __name__ == '__main__':
         remove_fields = ['target', 'row_id', 'time_id', 'investment_id']
         target_fields = ['target']
 
-        train_data = df.iloc[fold_indexes[fold]['train']]
-        val_data = df.iloc[fold_indexes[fold]['test']]
+        train_data = df.iloc[fold_indexes[fold]['train']].sort_values(by=['time_id'])
+        val_data = df.iloc[fold_indexes[fold]['test']].sort_values(by=['time_id'])
 
         checkpoint_callback = ModelCheckpoint(
             monitor="pearson",
