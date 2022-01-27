@@ -1,6 +1,6 @@
 import pickle
 import pandas as pd
-from data.grouptimeseriessplit import \
+from data.GroupTimeSeriesSplit import \
     GroupTimeSeriesSplit
 
 # read the dataframe
