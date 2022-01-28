@@ -62,7 +62,7 @@ class PurgedGroupTimeSeriesSplit(_BaseKFold):
                                     train_array_tmp)),
                     axis=None), axis=None)
 
-            train_end = train_array.size
+            # train_end = train_array.size
 
             for test_group_idx in unique_groups[group_test_start: group_test_start + group_test_size]:
                 test_array_tmp = group_dict[test_group_idx]

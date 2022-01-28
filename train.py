@@ -16,9 +16,18 @@ warnings.filterwarnings("ignore")
 import os
 os.environ['KMP_DUPLICATE_LIB_OK']='True'
 
+pl.utilities.seed.seed_everything(seed=2022)
+
 epochs = 5
 l_rate = 1e-3
 mse_loss = nn.MSELoss()
+
+def pearson_loss(x, y):
+    xd = x - x.mean()
+    yd = y - y.mean()
+    nom = (xd*yd).sum()
+    denom = ((xd**2).sum() * (yd**2).sum()).sqrt()
+    return 1 - nom / denom
 
 def swish(x):
     return x * torch.sigmoid(x)
@@ -51,21 +60,20 @@ class UbiquantModel(pl.LightningModule):
         super(UbiquantModel, self).__init__()
         self.emb = nn.Embedding(3774, 64)
         self.emb_drop = nn.Dropout(0.1)
-        self.bn1 = nn.BatchNorm1d(300)
-        # self.fc1 = nn.Linear(64+300, 512)
-        self.fc1 = nn.Linear(300, 512)
+        self.bn1 = nn.BatchNorm1d(364)
+        self.fc1 = nn.Linear(64+300, 512)
+        # self.fc1 = nn.Linear(300, 512)
         self.fc2 = nn.Linear(512, 128)
         self.fc3 = nn.Linear(128, 64)
         self.fc4 = nn.Linear(64, 32)
         self.fc5 = nn.Linear(32, 1)
 
     def forward(self, x_cont, x_cat):
-        # x1 = self.emb(x_cat)
-        # x1 = self.emb_drop(x1)
-        #
-        # x = torch.cat([x1, x_cont], 1)
+        x1 = self.emb(x_cat)
+        x1 = self.emb_drop(x1)
 
-        x = swish(self.fc1(x_cont))
+        x = torch.cat([x1, x_cont], 1)
+        x = swish(self.fc1(x))
         x = swish(self.fc2(x))
         x = swish(self.fc3(x))
         x = swish(self.fc4(x))
@@ -88,7 +96,7 @@ class UbiquantModel(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         x_cont, x_cat, y = batch
         logits = self.forward(x_cont, x_cat)
-        loss = mse_loss(logits, y)
+        loss = pearson_loss(logits, y)
         logs = {'loss': loss}
         return {'loss': loss, 'log': logs}
 
@@ -120,7 +128,7 @@ if __name__ == '__main__':
 
     print('data loaded...')
 
-    with open('input/folds.pickle', 'rb') as handle:
+    with open('input/folds_gap15.pickle', 'rb') as handle:
         fold_indexes = pickle.load(handle)
 
     for fold in fold_indexes:
