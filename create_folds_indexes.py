@@ -4,7 +4,8 @@ from data.grouptimeseriessplit import \
     GroupTimeSeriesSplit
 
 # read the dataframe
-df = pd.read_csv('input/train.csv')
+DATA_DIR = 'data/parquet/'
+df = pd.read_parquet(DATA_DIR+'train_low_mem.parquet')
 
 investment_ids = set(df.investment_id)
 
@@ -18,6 +19,7 @@ for investment_id in investment_ids:
     if x_train.shape[0] > 5:
         fold = 0
         for train_idx, test_idx in GroupTimeSeriesSplit().split(x_train, groups=x_train.index):
+            # print(train_idx,test_idx)
             train_indexes = df[(df.investment_id == investment_id) &
                                (df.time_id.isin(x_train.iloc[train_idx].index))].index
             test_indexes = df[(df.investment_id == investment_id) &
@@ -31,7 +33,10 @@ for investment_id in investment_ids:
             fold += 1
     else:
         pass
+    
+    # break
+    
 
-with open('input/folds.pickle', 'wb') as handle:
-    pickle.dump(fold_indexes, handle, protocol=pickle.HIGHEST_PROTOCOL)
+# with open('input/folds.pickle', 'wb') as handle:
+#     pickle.dump(fold_indexes, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
