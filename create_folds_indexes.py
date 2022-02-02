@@ -35,8 +35,8 @@ for investment_id in investment_ids:
         pass
     
     # break
-    
 
-# with open('input/folds.pickle', 'wb') as handle:
-#     pickle.dump(fold_indexes, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+with open('input/folds.pickle', 'wb') as handle:
+    pickle.dump(fold_indexes, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
