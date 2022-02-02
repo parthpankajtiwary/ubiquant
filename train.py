@@ -10,6 +10,8 @@ import pytorch_lightning as pl
 from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import ModelCheckpoint
 
+from data.GroupTimeSeriesSplit import GroupTimeSeriesSplit
+
 from typing import List
 
 import warnings
@@ -160,7 +162,7 @@ class UbiquantModel(pl.LightningModule):
             x_cont, x_cat, y = batch
             logits = self.forward(x_cont, x_cat)
         else:
-            x_cont, [], y = batch
+            x_cont, _, y = batch
             logits = self.forward(x_cont, [])
         loss = pearson_loss(logits, y)
         logs = {'loss': loss}
@@ -171,7 +173,7 @@ class UbiquantModel(pl.LightningModule):
             x_cont, x_cat, y = batch
             logits = self.forward(x_cont, x_cat)
         else:
-            x_cont, [], y = batch
+            x_cont, _, y = batch
             logits = self.forward(x_cont, [])
         scores_df = pd.DataFrame(index=range(len(y)), columns=['targets', 'preds'])
         scores_df.targets = y.cpu().numpy()
@@ -185,6 +187,10 @@ class UbiquantModel(pl.LightningModule):
     def validation_epoch_end(self, outputs):
         avg_loss = torch.stack([x['val_loss'] for x in outputs]).mean()
         print('mean pearson correlation on validation set: ', avg_loss)
+        if fold not in scores:
+            scores[fold] = [avg_loss]
+        else:
+            scores[fold].append(avg_loss)
         tensorboard_logs = {'val_loss': avg_loss}
         return {'avg_val_loss': avg_loss, 'log': tensorboard_logs}
 
@@ -193,48 +199,47 @@ class UbiquantModel(pl.LightningModule):
 
 
 if __name__ == '__main__':
+
+    submission = False
     scores = dict()
     df = pd.read_csv('input/train.csv')
 
     print('data loaded...')
 
-    with open('input/folds.pickle', 'rb') as handle:
-        fold_indexes = pickle.load(handle)
+    gtss = GroupTimeSeriesSplit(n_folds=5, holdout_size=150, groups=df['time_id'])
 
-    fold = 0
+    for fold, (train_indexes, val_indexes) in enumerate(gtss.split(df)):
+        train_data = df.iloc[train_indexes].sort_values(by=['time_id'])
+        val_data = df.iloc[val_indexes].sort_values(by=['time_id'])
 
-    remove_fields = ['target', 'row_id', 'time_id', 'investment_id']
-    target_fields = ['target']
+        checkpoint_callback = ModelCheckpoint(
+            monitor="pearson",
+            dirpath="models",
+            filename="fold-" + str(fold) + "-ubiquant-mlp-{epoch:02d}-{val_loss:.2f}",
+            save_top_k=1,
+            mode="max",
+        )
 
-    train_data = df.iloc[fold_indexes[fold]['train']].sort_values(by=['time_id'])
-    val_data = df.iloc[fold_indexes[fold]['test']].sort_values(by=['time_id'])
+        model = UbiquantModel(dropout_mlp=0.4217199217221381,
+                              dropout_emb=0.4250209544891712,
+                              output_dims=[508, 405],
+                              emb_dims=[245, 238, 230],
+                              emb_output=56,
+                              l_rate=0.00026840511349794486,
+                              categorical=True)
 
-    checkpoint_callback = ModelCheckpoint(
-        monitor="pearson",
-        dirpath="models",
-        filename="fold-" + str(fold) + "-ubiquant-mlp-{epoch:02d}-{val_loss:.2f}",
-        save_top_k=1,
-        mode="max",
-    )
+        print(model)
 
-    model = UbiquantModel(dropout_mlp=0.4217199217221381,
-                          dropout_emb=0.4250209544891712,
-                          output_dims=[508, 405],
-                          emb_dims=[245, 238, 230],
-                          emb_output=56,
-                          l_rate=0.00026840511349794486,
-                          categorical=False)
-
-    print(model)
-
-    trainer = Trainer(max_epochs=EPOCHS,
-                      fast_dev_run=False,
-                      callbacks=[checkpoint_callback],
-                      gpus=1)
-    trainer.fit(model)
+        trainer = Trainer(max_epochs=EPOCHS,
+                          fast_dev_run=False,
+                          callbacks=[checkpoint_callback],
+                          gpus=1)
+        trainer.fit(model)
 
     score_list = list()
     for fold in scores:
         score_list.append(max(scores[fold]))
+
+    print(score_list)
 
     print('final weighted correlation for the experiment: ', weighted_average(score_list))
