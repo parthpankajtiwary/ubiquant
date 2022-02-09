@@ -22,13 +22,10 @@ import os
 
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 
-pl.utilities.seed.seed_everything(seed=2022)
-
 BATCHSIZE = 8192
 CLASSES = 1
 EPOCHS = 15
 DIR = os.getcwd()
-
 
 def pearson_loss(x, y):
     xd = x - x.mean()
@@ -54,7 +51,8 @@ def weighted_average(a):
 class UbiquantData(Dataset):
     def __init__(self, data: pd.core.frame.DataFrame, categorical=False):
         self.target = data[['target']].values
-        self.data = data.drop(['row_id', 'time_id', 'investment_id', 'target'], axis=1).values
+        self.data = data.drop(['index', 'row_id', 'time_id', 'investment_id', 'target'], axis=1).values
+        # self.data = data.drop(['row_id', 'time_id', 'investment_id', 'target'], axis=1).values
         self.investment_ids = data.investment_id.values
         self.categorical = categorical
 
@@ -200,15 +198,23 @@ class UbiquantModel(pl.LightningModule):
 
 if __name__ == '__main__':
 
-    submission = False
+    # import random
+
     scores = dict()
     df = pd.read_csv('input/train.csv')
+
+    df = df[(df.time_id <= 355) | (df.time_id >= 420)].reset_index()
 
     print('data loaded...')
 
     gtss = GroupTimeSeriesSplit(n_folds=5, holdout_size=150, groups=df['time_id'])
 
+    pl.utilities.seed.seed_everything(seed=2022)
+
     for fold, (train_indexes, val_indexes) in enumerate(gtss.split(df)):
+
+        print(len(train_indexes), len(val_indexes))
+
         train_data = df.iloc[train_indexes].sort_values(by=['time_id'])
         val_data = df.iloc[val_indexes].sort_values(by=['time_id'])
 
@@ -240,6 +246,7 @@ if __name__ == '__main__':
     for fold in scores:
         score_list.append(max(scores[fold]))
 
+    score_list.reverse()
     print(score_list)
 
     print('final weighted correlation for the experiment: ', weighted_average(score_list))
