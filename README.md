@@ -149,26 +149,25 @@ _For more examples, please refer to the [Documentation](https://example.com)_
 <!-- ROADMAP -->
 ## Roadmap
 
-- [ ] Add EDA
-- [ ] Add a list of credible ideas
-- [ ] Add data pre-processing pipeline
-- [ ] Add model training pipeline
-- [ ] Add a backlog of potential ideas for improvement (over baseline)
+- [x] Add EDA
+- [x] Add a list of credible ideas
+- [x] Add data pre-processing pipeline
+- [x] Add model training pipeline
+- [x] Add a backlog of potential ideas for improvement (over baseline)
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 
 <!-- Backlog -->
 ## Backlog
 
-### Rohit
-- [ ] Formulate the problem: can we treat it as time series? [explore LSTM baseline approach]
-- [ ] Define if we need a separate model for each investment_id (placeholder result: discarded)
-- [ ] Need to find groups b/w investment_id's
-
-### Parth
-- [ ] Create folder structure for the repo (model, data, notebooks/train.ipynb, train.py)
-- [ ] Mean and std comparison on the target variable across investment_id's
-- [ ] Plot temporal variation of target value across investment_id's 
+- [x] Formulate the problem: can we treat it as time series? [explore LSTM baseline approach]
+- [x] Define if we need a separate model for each investment_id (placeholder result: discarded)
+- [x] Need to find groups b/w investment_id's
+- [x] Create folder structure for the repo (model, data, notebooks/train.ipynb, train.py)
+- [x] Mean and std comparison on the target variable across investment_id's
+- [x] Plot temporal variation of target value across investment_id's 
+- [ ] Fix pearson evaluation on the validation set: mean pearson corr per time id
+- [ ] Optimize hyperparameters on the final fold
 - [ ] Define a validation schedule and use it across model training (5-folds at least)
 - [ ] Add baseline autoencoder-MLP implementation in PTL
 
