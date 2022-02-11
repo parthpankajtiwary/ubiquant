@@ -6,6 +6,9 @@ import torch
 import torch.optim as optim
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
+
+torch.cuda.is_available()
+
 import pytorch_lightning as pl
 from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import ModelCheckpoint
@@ -20,11 +23,13 @@ warnings.filterwarnings("ignore")
 
 import os
 
-os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
+# +
+# os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
+# -
 
 BATCHSIZE = 8192
 CLASSES = 1
-EPOCHS = 15
+EPOCHS = 30
 DIR = os.getcwd()
 
 def pearson_loss(x, y):
@@ -50,8 +55,8 @@ def weighted_average(a):
 
 class UbiquantData(Dataset):
     def __init__(self, data: pd.core.frame.DataFrame, categorical=False):
-        self.target = data[['target']].values
-        self.data = data.drop(['index', 'row_id', 'time_id', 'investment_id', 'target'], axis=1).values
+        self.target = data[['target']].values.astype(float)
+        self.data = data.drop(['index', 'row_id', 'time_id', 'investment_id', 'target'], axis=1).values.astype(float)
         # self.data = data.drop(['row_id', 'time_id', 'investment_id', 'target'], axis=1).values
         self.investment_ids = data.investment_id.values
         self.categorical = categorical
@@ -146,12 +151,12 @@ class UbiquantModel(pl.LightningModule):
         return self.model(x_cont, x_cat)
 
     def train_dataloader(self):
-        train_dataset = UbiquantData(train_data, categorical=True)
+        train_dataset = UbiquantData(train_data, categorical=self.categorical)
         train_loader = DataLoader(dataset=train_dataset, batch_size=BATCHSIZE)
         return train_loader
 
     def val_dataloader(self):
-        val_dataset = UbiquantData(val_data, categorical=True)
+        val_dataset = UbiquantData(val_data, categorical=self.categorical)
         val_loader = DataLoader(dataset=val_dataset, batch_size=BATCHSIZE)
         return val_loader
 
@@ -196,12 +201,18 @@ class UbiquantModel(pl.LightningModule):
         return optim.Adam(self.parameters(), lr=self.l_rate)
 
 
+BASE_DIR = '/sharedHDD/rohit/timeseries_learning/ubiquant/'
+DATA_DIR = BASE_DIR+'data/parquet/'
+INPUT_DIR = BASE_DIR+'input/'
+WEIGHTS_DIR = BASE_DIR + 'weights/'
+
 if __name__ == '__main__':
+    print('In main')
 
     # import random
 
     scores = dict()
-    df = pd.read_csv('input/train.csv')
+    df = pd.read_parquet(DATA_DIR+'train_low_mem.parquet')
 
     df = df[(df.time_id <= 355) | (df.time_id >= 420)].reset_index()
 
@@ -220,7 +231,7 @@ if __name__ == '__main__':
 
         checkpoint_callback = ModelCheckpoint(
             monitor="pearson",
-            dirpath="models",
+            dirpath=WEIGHTS_DIR,
             filename="fold-" + str(fold) + "-ubiquant-mlp-{epoch:02d}-{val_loss:.2f}",
             save_top_k=1,
             mode="max",
@@ -232,7 +243,7 @@ if __name__ == '__main__':
                               emb_dims=[245, 238, 230],
                               emb_output=56,
                               l_rate=0.00026840511349794486,
-                              categorical=True)
+                              categorical=False)
 
         print(model)
 
@@ -250,3 +261,5 @@ if __name__ == '__main__':
     print(score_list)
 
     print('final weighted correlation for the experiment: ', weighted_average(score_list))
+
+
