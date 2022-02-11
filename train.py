@@ -5,75 +5,175 @@ import numpy as np
 import torch
 import torch.optim as optim
 import torch.nn as nn
-from torch.utils.data import Dataset, TensorDataset, DataLoader
+from torch.utils.data import Dataset, DataLoader
 import pytorch_lightning as pl
 from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import ModelCheckpoint
 
+from data.GroupTimeSeriesSplit import GroupTimeSeriesSplit
+
+from typing import List
+
 import warnings
+
 warnings.filterwarnings("ignore")
 
 import os
-os.environ['KMP_DUPLICATE_LIB_OK']='True'
 
-epochs = 5
-l_rate = 1e-3
-mse_loss = nn.MSELoss()
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
+
+BATCHSIZE = 8192
+CLASSES = 1
+EPOCHS = 15
+DIR = os.getcwd()
+
+def pearson_loss(x, y):
+    xd = x - x.mean()
+    yd = y - y.mean()
+    nom = (xd * yd).sum()
+    denom = ((xd ** 2).sum() * (yd ** 2).sum()).sqrt()
+    return 1 - nom / denom
+
 
 def swish(x):
     return x * torch.sigmoid(x)
+
 
 def weighted_average(a):
     w = []
     n = len(a)
     for j in range(1, n + 1):
         j = 2 if j == 1 else j
-        w.append(1 / (2**(n + 1 - j)))
-    return np.average(a, weights = w)
+        w.append(1 / (2 ** (n + 1 - j)))
+    return np.average(a, weights=w)
+
+
+class UbiquantData(Dataset):
+    def __init__(self, data: pd.core.frame.DataFrame, categorical=False):
+        self.target = data[['target']].values
+        self.data = data.drop(['index', 'row_id', 'time_id', 'investment_id', 'target'], axis=1).values
+        # self.data = data.drop(['row_id', 'time_id', 'investment_id', 'target'], axis=1).values
+        self.investment_ids = data.investment_id.values
+        self.categorical = categorical
+
+    def __getitem__(self, idx):
+        x_cont = self.data[idx]
+        target = self.target[idx]
+        x_cat = self.investment_ids[idx]
+        if self.categorical:
+            return torch.tensor(x_cont).float(), x_cat, torch.tensor(target).float()
+        else:
+            return torch.tensor(x_cont).float(), [], torch.tensor(target).float()
+
+    def __len__(self):
+        return len(self.data)
+
+
+class Net(nn.Module):
+    def __init__(self,
+                 dropout_mlp: float,
+                 dropout_emb: float,
+                 output_dims: List[int],
+                 cat_dims: List[int],
+                 emb_output: int,
+                 categorical=False):
+
+        super().__init__()
+        self.categorical = categorical
+        mlp_layers: List[nn.Module] = []
+        input_dim: int = 300
+
+        if categorical:
+            cat_input_dim: int = 3774
+            emb_layers: List[nn.Module] = [nn.Embedding(cat_input_dim, emb_output)]
+            cat_input_dim = emb_output
+            for cat_output_dim in cat_dims:
+                emb_layers.append(nn.Linear(cat_input_dim, cat_output_dim))
+                emb_layers.append(nn.ReLU())
+                emb_layers.append(nn.Dropout(dropout_emb))
+                cat_input_dim = cat_output_dim
+
+            input_dim += cat_output_dim
+
+            for output_dim in output_dims:
+                mlp_layers.append(nn.Linear(input_dim, output_dim))
+                mlp_layers.append(nn.ReLU())
+                mlp_layers.append(nn.Dropout(dropout_mlp))
+                input_dim = output_dim
+        else:
+            for output_dim in output_dims:
+                mlp_layers.append(nn.Linear(input_dim, output_dim))
+                mlp_layers.append(nn.ReLU())
+                mlp_layers.append(nn.Dropout(dropout_mlp))
+                input_dim = output_dim
+
+        mlp_layers.append(nn.Linear(input_dim, 1))
+
+        if self.categorical:
+            self.emb_nn: nn.Module = nn.Sequential(*emb_layers)
+        self.mlp_nn: nn.Module = nn.Sequential(*mlp_layers)
+
+    def forward(self, x_cont, x_cat):
+        if self.categorical:
+            x_cat = self.emb_nn(x_cat)
+            concat = torch.cat([x_cat, x_cont], 1)
+            output = self.mlp_nn(concat)
+        else:
+            output = self.mlp_nn(x_cont)
+        return output
+
 
 class UbiquantModel(pl.LightningModule):
-    def __init__(self):
-        super(UbiquantModel, self).__init__()
-        self.fc1 = nn.Linear(300, 512)
-        self.fc2 = nn.Linear(512, 128)
-        self.fc3 = nn.Linear(128, 64)
-        self.fc4 = nn.Linear(64, 32)
-        self.fc5 = nn.Linear(32, 1)
+    def __init__(self,
+                 dropout_mlp: float,
+                 dropout_emb: float,
+                 output_dims: List[int],
+                 emb_dims: List[int],
+                 emb_output: int,
+                 l_rate: float,
+                 categorical: bool):
+        super().__init__()
+        self.model = Net(dropout_mlp,
+                         dropout_emb,
+                         output_dims,
+                         emb_dims,
+                         emb_output,
+                         categorical=categorical)
+        self.l_rate = l_rate
+        self.categorical = categorical
 
-    def forward(self, x):
-        x = swish(self.fc1(x))
-        x = swish(self.fc2(x))
-        x = swish(self.fc3(x))
-        x = swish(self.fc4(x))
-        x = self.fc5(x)
-        return x
+    def forward(self, x_cont, x_cat):
+        return self.model(x_cont, x_cat)
 
     def train_dataloader(self):
-        train_dataset = TensorDataset(torch.tensor(train_features.values).float(),
-                                      torch.tensor(train_targets[['target']].values).float())
-        train_loader = DataLoader(dataset=train_dataset, batch_size=4096)
+        train_dataset = UbiquantData(train_data, categorical=True)
+        train_loader = DataLoader(dataset=train_dataset, batch_size=BATCHSIZE)
         return train_loader
 
     def val_dataloader(self):
-        validation_dataset = TensorDataset(torch.tensor(validation_features.values).float(),
-                                           torch.tensor(validation_targets[['target']].values).float())
-        validation_loader = DataLoader(dataset=validation_dataset, batch_size=4096)
-        return validation_loader
-
-    def configure_optimizers(self):
-        return optim.Adam(self.parameters(), lr=l_rate)
+        val_dataset = UbiquantData(val_data, categorical=True)
+        val_loader = DataLoader(dataset=val_dataset, batch_size=BATCHSIZE)
+        return val_loader
 
     def training_step(self, batch, batch_idx):
-        x, y = batch
-        logits = self.forward(x)
-        loss = mse_loss(logits, y)
+        if self.categorical:
+            x_cont, x_cat, y = batch
+            logits = self.forward(x_cont, x_cat)
+        else:
+            x_cont, _, y = batch
+            logits = self.forward(x_cont, [])
+        loss = pearson_loss(logits, y)
         logs = {'loss': loss}
         return {'loss': loss, 'log': logs}
 
     def validation_step(self, batch, batch_idx):
-        x, y = batch
+        if self.categorical:
+            x_cont, x_cat, y = batch
+            logits = self.forward(x_cont, x_cat)
+        else:
+            x_cont, _, y = batch
+            logits = self.forward(x_cont, [])
         scores_df = pd.DataFrame(index=range(len(y)), columns=['targets', 'preds'])
-        logits = self.forward(x)
         scores_df.targets = y.cpu().numpy()
         scores_df.preds = logits.cpu().numpy()
         pearson = scores_df['targets'].corr(scores_df['preds'])
@@ -92,25 +192,31 @@ class UbiquantModel(pl.LightningModule):
         tensorboard_logs = {'val_loss': avg_loss}
         return {'avg_val_loss': avg_loss, 'log': tensorboard_logs}
 
+    def configure_optimizers(self):
+        return optim.Adam(self.parameters(), lr=self.l_rate)
+
+
 if __name__ == '__main__':
+
+    # import random
+
     scores = dict()
     df = pd.read_csv('input/train.csv')
 
+    df = df[(df.time_id <= 355) | (df.time_id >= 420)].reset_index()
+
     print('data loaded...')
 
-    with open('input/folds.pickle', 'rb') as handle:
-        fold_indexes = pickle.load(handle)
+    gtss = GroupTimeSeriesSplit(n_folds=5, holdout_size=150, groups=df['time_id'])
 
-    for fold in fold_indexes:
-        remove_fields = ['target', 'row_id', 'time_id', 'investment_id']
-        target_fields = ['target']
+    pl.utilities.seed.seed_everything(seed=2022)
 
-        train_data = df.iloc[fold_indexes[fold]['train']]
-        validation_data = df.iloc[fold_indexes[fold]['test']]
+    for fold, (train_indexes, val_indexes) in enumerate(gtss.split(df)):
 
-        train_features, train_targets = train_data.drop(remove_fields, axis=1), train_data[target_fields]
-        validation_features, validation_targets = validation_data.drop(remove_fields, axis=1), validation_data[
-            target_fields]
+        print(len(train_indexes), len(val_indexes))
+
+        train_data = df.iloc[train_indexes].sort_values(by=['time_id'])
+        val_data = df.iloc[val_indexes].sort_values(by=['time_id'])
 
         checkpoint_callback = ModelCheckpoint(
             monitor="pearson",
@@ -120,8 +226,17 @@ if __name__ == '__main__':
             mode="max",
         )
 
-        model = UbiquantModel()
-        trainer = Trainer(max_epochs=epochs,
+        model = UbiquantModel(dropout_mlp=0.4217199217221381,
+                              dropout_emb=0.4250209544891712,
+                              output_dims=[508, 405],
+                              emb_dims=[245, 238, 230],
+                              emb_output=56,
+                              l_rate=0.00026840511349794486,
+                              categorical=True)
+
+        print(model)
+
+        trainer = Trainer(max_epochs=EPOCHS,
                           fast_dev_run=False,
                           callbacks=[checkpoint_callback],
                           gpus=1)
@@ -130,5 +245,8 @@ if __name__ == '__main__':
     score_list = list()
     for fold in scores:
         score_list.append(max(scores[fold]))
+
+    score_list.reverse()
+    print(score_list)
 
     print('final weighted correlation for the experiment: ', weighted_average(score_list))
