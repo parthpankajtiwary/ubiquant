@@ -29,7 +29,7 @@ import os
 
 BATCHSIZE = 8192
 CLASSES = 1
-EPOCHS = 17
+EPOCHS = 30
 DIR = os.getcwd()
 
 def pearson_loss(x, y):
@@ -256,6 +256,7 @@ DATA_DIR = BASE_DIR+'data/parquet/'
 INPUT_DIR = BASE_DIR+'input/'
 WEIGHTS_DIR = BASE_DIR + 'weights/'
 
+# +
 if __name__ == '__main__':
     print('In main')
 
@@ -282,19 +283,32 @@ if __name__ == '__main__':
         checkpoint_callback = ModelCheckpoint(
             monitor="pearson",
             dirpath=WEIGHTS_DIR,
-            filename="fold-" + str(fold) + "-ubiquant-mlp-plus-cls2-{epoch:02d}-{val_loss:.2f}",
+            filename="fold-" + str(fold) + "-ubiquant-mlp-plus-cls-trial-41-{epoch:02d}-{val_loss:.2f}",
             save_top_k=1,
             mode="max",
         )
+        
+        
+#         {'n_mlp_layers': 4, 
+#          'n_cls_layers': 4, 
+#          'dropout_mlp': 0.1485931999825141, 
+#          'dropout_mlp_cls': 0.36942274481046417, 
+#          'n_units_mlp0': 239, 'n_units_mlp1': 163, 
+#          'n_units_mlp2': 333, 'n_units_mlp3': 96, 
+         
+#          'n_units_mlp_cls0': 61, 'n_units_mlp_cls1': 55, 
+#          'n_units_mlp_cls2': 210, 'n_units_mlp_cls3': 145, 
+         
+#          'learning_rate': 0.0007520128658402996}
 
-        model = UbiquantModel(dropout_mlp=0.4217199217221381,
+        model = UbiquantModel(dropout_mlp=0.1485931999825141,
                               dropout_emb=0.4250209544891712,
-                              output_dims=[508, 405],
+                              output_dims=[239, 163,333,96],
                               emb_dims=[245, 238, 230],
                               emb_output=56,
-                              l_rate=0.00026840511349794486,
-                              dropout_mlp_cls = 0.2,
-                              output_dims_cls = [50],
+                              l_rate=0.0007520128658402996,
+                              dropout_mlp_cls = 0.36942274481046417,
+                              output_dims_cls = [61,55,210,145],
                               with_classification = True,
                               categorical=False)
 
@@ -305,7 +319,7 @@ if __name__ == '__main__':
                           callbacks=[checkpoint_callback],
                           gpus=1)
         trainer.fit(model)
-
+        break
     score_list = list()
     for fold in scores:
         score_list.append(max(scores[fold]))
@@ -314,5 +328,6 @@ if __name__ == '__main__':
     print(score_list)
 
     print('final weighted correlation for the experiment: ', weighted_average(score_list))
+# -
 
 

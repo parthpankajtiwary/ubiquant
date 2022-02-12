@@ -338,7 +338,7 @@ if __name__ == "__main__":
 #     val_data = pd.read_csv('input/fold_0_val.csv')
 
     study = optuna.create_study(direction="maximize", pruner=pruner, sampler=optuna.samplers.TPESampler())
-    study.optimize(objective, n_trials=100, timeout=600)
+    study.optimize(objective, n_trials=100, timeout=86400)
 
     print("Number of finished trials: {}".format(len(study.trials)))
 
