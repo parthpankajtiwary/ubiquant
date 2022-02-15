@@ -1,7 +1,8 @@
-import pickle
+import os
+import warnings
 import pandas as pd
 import numpy as np
-
+from typing import List
 import torch
 import torch.optim as optim
 import torch.nn as nn
@@ -9,16 +10,10 @@ from torch.utils.data import Dataset, DataLoader
 import pytorch_lightning as pl
 from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import ModelCheckpoint
-
+from pytorch_lightning.loggers import NeptuneLogger
 from data.GroupTimeSeriesSplit import GroupTimeSeriesSplit
 
-from typing import List
-
-import warnings
-
 warnings.filterwarnings("ignore")
-
-import os
 
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 
@@ -27,16 +22,13 @@ CLASSES = 1
 EPOCHS = 15
 DIR = os.getcwd()
 
+
 def pearson_loss(x, y):
     xd = x - x.mean()
     yd = y - y.mean()
     nom = (xd * yd).sum()
     denom = ((xd ** 2).sum() * (yd ** 2).sum()).sqrt()
     return 1 - nom / denom
-
-
-def swish(x):
-    return x * torch.sigmoid(x)
 
 
 def weighted_average(a):
@@ -162,9 +154,19 @@ class UbiquantModel(pl.LightningModule):
         else:
             x_cont, _, y = batch
             logits = self.forward(x_cont, [])
-        loss = pearson_loss(logits, y)
-        logs = {'loss': loss}
-        return {'loss': loss, 'log': logs}
+        scores_df = pd.DataFrame(index=range(len(y)), columns=['targets', 'preds'])
+        scores_df.targets, scores_df.preds = y.detach().cpu().numpy(), logits.detach().cpu().numpy()
+        pearson = scores_df['targets'].corr(scores_df['preds'])
+        pearson = torch.from_numpy(np.array(pearson))
+        p_loss = pearson_loss(logits, y)
+        self.log("fold-{}/train/batch/loss".format(fold), p_loss)
+        self.log("fold-{}/train/batch/pearson".format(fold), pearson)
+        return {'loss': p_loss, 'train_corr': pearson}
+
+    def training_epoch_end(self, outputs):
+        avg_corr = torch.stack([x['train_corr'] for x in outputs]).mean()
+        print('mean pearson correlation on TRAINING set: ', avg_corr)
+        self.log("fold-{}/train/epoch/pearson".format(fold), avg_corr)
 
     def validation_step(self, batch, batch_idx):
         if self.categorical:
@@ -174,35 +176,35 @@ class UbiquantModel(pl.LightningModule):
             x_cont, _, y = batch
             logits = self.forward(x_cont, [])
         scores_df = pd.DataFrame(index=range(len(y)), columns=['targets', 'preds'])
-        scores_df.targets = y.cpu().numpy()
-        scores_df.preds = logits.cpu().numpy()
+        scores_df.targets, scores_df.preds = y.cpu().numpy(), logits.cpu().numpy()
         pearson = scores_df['targets'].corr(scores_df['preds'])
-        pearson = np.array(pearson)
-        pearson = torch.from_numpy(pearson)
-        self.log('pearson', pearson)
-        return {'val_loss': pearson}
+        pearson = torch.from_numpy(np.array(pearson))
+        self.log("fold-{}/valid/batch/pearson".format(fold), pearson)
+        return {'val_corr': pearson}
 
     def validation_epoch_end(self, outputs):
-        avg_loss = torch.stack([x['val_loss'] for x in outputs]).mean()
-        print('mean pearson correlation on validation set: ', avg_loss)
+        avg_corr = torch.stack([x['val_corr'] for x in outputs]).mean()
+        print('mean pearson correlation on VALIDATION set: ', avg_corr)
         if fold not in scores:
-            scores[fold] = [avg_loss]
+            scores[fold] = [avg_corr]
         else:
-            scores[fold].append(avg_loss)
-        tensorboard_logs = {'val_loss': avg_loss}
-        return {'avg_val_loss': avg_loss, 'log': tensorboard_logs}
+            scores[fold].append(avg_corr)
+        self.log("fold-{}/valid/epoch/pearson".format(fold), avg_corr)
+        return {'avg_val_corr': avg_corr}
 
     def configure_optimizers(self):
         return optim.Adam(self.parameters(), lr=self.l_rate)
 
 
 if __name__ == '__main__':
-
-    # import random
+    neptune_logger = NeptuneLogger(
+        project="kaggle.collaboration/ubiquant",
+        tags=["5-fold", "training"],
+    )
 
     scores = dict()
-    df = pd.read_csv('input/train.csv')
 
+    df = pd.read_csv('input/train.csv')
     df = df[(df.time_id <= 355) | (df.time_id >= 420)].reset_index()
 
     print('data loaded...')
@@ -212,17 +214,14 @@ if __name__ == '__main__':
     pl.utilities.seed.seed_everything(seed=2022)
 
     for fold, (train_indexes, val_indexes) in enumerate(gtss.split(df)):
-
-        print(len(train_indexes), len(val_indexes))
-
         train_data = df.iloc[train_indexes].sort_values(by=['time_id'])
         val_data = df.iloc[val_indexes].sort_values(by=['time_id'])
 
         checkpoint_callback = ModelCheckpoint(
-            monitor="pearson",
+            monitor="fold-{}/valid/epoch/pearson".format(fold),
             dirpath="models",
             filename="fold-" + str(fold) + "-ubiquant-mlp-{epoch:02d}-{val_loss:.2f}",
-            save_top_k=1,
+            save_top_k=3,
             mode="max",
         )
 
@@ -232,11 +231,12 @@ if __name__ == '__main__':
                               emb_dims=[245, 238, 230],
                               emb_output=56,
                               l_rate=0.00026840511349794486,
-                              categorical=True)
+                              categorical=False)
 
         print(model)
 
         trainer = Trainer(max_epochs=EPOCHS,
+                          logger=neptune_logger,
                           fast_dev_run=False,
                           callbacks=[checkpoint_callback],
                           gpus=1)
@@ -247,6 +247,6 @@ if __name__ == '__main__':
         score_list.append(max(scores[fold]))
 
     score_list.reverse()
-    print(score_list)
+    neptune_logger.log("weighted_average", weighted_average(score_list))
 
     print('final weighted correlation for the experiment: ', weighted_average(score_list))
