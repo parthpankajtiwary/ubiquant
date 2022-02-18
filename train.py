@@ -17,7 +17,7 @@ warnings.filterwarnings("ignore")
 
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 
-BATCHSIZE = 8192
+BATCHSIZE = 30000
 CLASSES = 1
 EPOCHS = 15
 DIR = os.getcwd()
@@ -43,6 +43,7 @@ def weighted_average(a):
 class UbiquantData(Dataset):
     def __init__(self, data: pd.core.frame.DataFrame, categorical=False):
         self.target = data[['target']].values
+        self.time_id = data.time_id.values
         self.data = data.drop(['index', 'row_id', 'time_id', 'investment_id', 'target'], axis=1).values
         # self.data = data.drop(['row_id', 'time_id', 'investment_id', 'target'], axis=1).values
         self.investment_ids = data.investment_id.values
@@ -52,10 +53,11 @@ class UbiquantData(Dataset):
         x_cont = self.data[idx]
         target = self.target[idx]
         x_cat = self.investment_ids[idx]
+        time_ids = self.time_id[idx]
         if self.categorical:
-            return torch.tensor(x_cont).float(), x_cat, torch.tensor(target).float()
+            return torch.tensor(x_cont).float(), x_cat, torch.tensor(target).float(), time_ids
         else:
-            return torch.tensor(x_cont).float(), [], torch.tensor(target).float()
+            return torch.tensor(x_cont).float(), [], torch.tensor(target).float(), time_ids
 
     def __len__(self):
         return len(self.data)
@@ -115,6 +117,10 @@ class Net(nn.Module):
         return output
 
 
+def pearson_coef(data):
+    return data.corr()['targets']['preds']
+
+
 class UbiquantModel(pl.LightningModule):
     def __init__(self,
                  dropout_mlp: float,
@@ -133,6 +139,8 @@ class UbiquantModel(pl.LightningModule):
                          categorical=categorical)
         self.l_rate = l_rate
         self.categorical = categorical
+        self.train_scores = list()
+        self.valid_scores = list()
 
     def forward(self, x_cont, x_cat):
         return self.model(x_cont, x_cat)
@@ -149,47 +157,53 @@ class UbiquantModel(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         if self.categorical:
-            x_cont, x_cat, y = batch
+            x_cont, x_cat, y, time_ids = batch
             logits = self.forward(x_cont, x_cat)
         else:
-            x_cont, _, y = batch
+            x_cont, _, y, time_ids = batch
             logits = self.forward(x_cont, [])
-        scores_df = pd.DataFrame(index=range(len(y)), columns=['targets', 'preds'])
-        scores_df.targets, scores_df.preds = y.detach().cpu().numpy(), logits.detach().cpu().numpy()
-        pearson = scores_df['targets'].corr(scores_df['preds'])
+        scores_df = pd.DataFrame(index=range(len(y)), columns=['time_id', 'targets', 'preds'])
+        scores_df.time_id, scores_df.targets, scores_df.preds = time_ids.cpu().numpy(), \
+                                                                y.cpu().numpy(), \
+                                                                logits.detach().cpu().numpy()
+        self.train_scores.append(scores_df)
+        pearson = np.mean(pd.concat([scores_df]).groupby(['time_id']).apply(pearson_coef))
         pearson = torch.from_numpy(np.array(pearson))
         p_loss = pearson_loss(logits, y)
-        self.log("fold-{}/train/batch/loss".format(fold), p_loss)
-        self.log("fold-{}/train/batch/pearson".format(fold), pearson)
+        self.log("fold-{}/train/step/loss".format(fold), p_loss)
+        self.log("fold-{}/train/step/pearson".format(fold), pearson)
         return {'loss': p_loss, 'train_corr': pearson}
 
     def training_epoch_end(self, outputs):
-        avg_corr = torch.stack([x['train_corr'] for x in outputs]).mean()
-        print('mean pearson correlation on TRAINING set: ', avg_corr)
+        avg_corr = np.mean(pd.concat(self.train_scores).groupby(['time_id']).apply(pearson_coef))
+        print('mean pearson correlation on training set: ', avg_corr)
+        self.train_scores = list()
         self.log("fold-{}/train/epoch/pearson".format(fold), avg_corr)
 
     def validation_step(self, batch, batch_idx):
         if self.categorical:
-            x_cont, x_cat, y = batch
+            x_cont, x_cat, y, time_ids = batch
             logits = self.forward(x_cont, x_cat)
         else:
-            x_cont, _, y = batch
+            x_cont, _, y, time_ids = batch
             logits = self.forward(x_cont, [])
-        scores_df = pd.DataFrame(index=range(len(y)), columns=['targets', 'preds'])
-        scores_df.targets, scores_df.preds = y.cpu().numpy(), logits.cpu().numpy()
-        pearson = scores_df['targets'].corr(scores_df['preds'])
+        scores_df = pd.DataFrame(index=range(len(y)), columns=['time_id', 'targets', 'preds'])
+        scores_df.time_id, scores_df.targets, scores_df.preds = time_ids.cpu().numpy(), \
+                                                                y.cpu().numpy(), \
+                                                                logits.cpu().numpy()
+        self.valid_scores.append(scores_df)
+        pearson = np.mean(pd.concat([scores_df]).groupby(['time_id']).apply(pearson_coef))
         pearson = torch.from_numpy(np.array(pearson))
-        self.log("fold-{}/valid/batch/pearson".format(fold), pearson)
+        self.log("fold-{}/valid/step/pearson".format(fold), pearson)
         return {'val_corr': pearson}
 
     def validation_epoch_end(self, outputs):
-        avg_corr = torch.stack([x['val_corr'] for x in outputs]).mean()
-        print('mean pearson correlation on VALIDATION set: ', avg_corr)
-        if fold not in scores:
-            scores[fold] = [avg_corr]
-        else:
-            scores[fold].append(avg_corr)
+        if self.current_epoch == 9:
+            oof.append(pd.concat(self.valid_scores))
+        avg_corr = np.mean(pd.concat(self.valid_scores).groupby(['time_id']).apply(pearson_coef))
+        print('mean pearson correlation on validation set: ', avg_corr)
         self.log("fold-{}/valid/epoch/pearson".format(fold), avg_corr)
+        self.valid_scores = list()
         return {'avg_val_corr': avg_corr}
 
     def configure_optimizers(self):
@@ -202,18 +216,20 @@ if __name__ == '__main__':
         tags=["5-fold", "training"],
     )
 
-    scores = dict()
+    pl.utilities.seed.seed_everything(seed=2022)
 
     df = pd.read_csv('input/train.csv')
     df = df[(df.time_id <= 355) | (df.time_id >= 420)].reset_index()
-
     print('data loaded...')
 
-    gtss = GroupTimeSeriesSplit(n_folds=5, holdout_size=150, groups=df['time_id'])
+    oof = list()
 
-    pl.utilities.seed.seed_everything(seed=2022)
+    gtss = GroupTimeSeriesSplit(n_folds=1, holdout_size=100, groups=df['time_id'])
 
     for fold, (train_indexes, val_indexes) in enumerate(gtss.split(df)):
+
+        scores_valid, scores_train = list(), list()
+
         train_data = df.iloc[train_indexes].sort_values(by=['time_id'])
         val_data = df.iloc[val_indexes].sort_values(by=['time_id'])
 
@@ -231,7 +247,7 @@ if __name__ == '__main__':
                               emb_dims=[245, 238, 230],
                               emb_output=56,
                               l_rate=0.00026840511349794486,
-                              categorical=False)
+                              categorical=True)
 
         print(model)
 
@@ -242,11 +258,6 @@ if __name__ == '__main__':
                           gpus=1)
         trainer.fit(model)
 
-    score_list = list()
-    for fold in scores:
-        score_list.append(max(scores[fold]))
-
-    score_list.reverse()
-    neptune_logger.log("weighted_average", weighted_average(score_list))
-
-    print('final weighted correlation for the experiment: ', weighted_average(score_list))
+oof_pearson_coef = pd.concat(oof).groupby(['time_id']).apply(pearson_coef)
+neptune_logger.experiment['pearson_timeid'].log(oof_pearson_coef.values.tolist())
+print('oof score pearson coef per time id: ', np.mean(oof_pearson_coef))
