@@ -19,7 +19,7 @@ os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 
 BATCHSIZE = 30000
 CLASSES = 1
-EPOCHS = 15
+EPOCHS = 25
 DIR = os.getcwd()
 
 
@@ -29,6 +29,11 @@ def pearson_loss(x, y):
     nom = (xd * yd).sum()
     denom = ((xd ** 2).sum() * (yd ** 2).sum()).sqrt()
     return 1 - nom / denom
+
+
+def mse_loss(x, y):
+    diff_squared = ((x - y) ** 2)
+    return diff_squared.mean()
 
 
 def weighted_average(a):
@@ -169,7 +174,8 @@ class UbiquantModel(pl.LightningModule):
         self.train_scores.append(scores_df)
         pearson = np.mean(pd.concat([scores_df]).groupby(['time_id']).apply(pearson_coef))
         pearson = torch.from_numpy(np.array(pearson))
-        p_loss = pearson_loss(logits, y)
+        # p_loss = pearson_loss(logits, y)
+        p_loss = pearson_loss(logits, y) + mse_loss(logits, y)
         self.log("fold-{}/train/step/loss".format(fold), p_loss)
         self.log("fold-{}/train/step/pearson".format(fold), pearson)
         return {'loss': p_loss, 'train_corr': pearson}
@@ -198,7 +204,7 @@ class UbiquantModel(pl.LightningModule):
         return {'val_corr': pearson}
 
     def validation_epoch_end(self, outputs):
-        if self.current_epoch == 9:
+        if self.current_epoch == EPOCHS - 1:
             oof.append(pd.concat(self.valid_scores))
         avg_corr = np.mean(pd.concat(self.valid_scores).groupby(['time_id']).apply(pearson_coef))
         print('mean pearson correlation on validation set: ', avg_corr)
@@ -213,7 +219,7 @@ class UbiquantModel(pl.LightningModule):
 if __name__ == '__main__':
     neptune_logger = NeptuneLogger(
         project="kaggle.collaboration/ubiquant",
-        tags=["5-fold", "training"],
+        tags=["1-fold", "combined loss"],
     )
 
     pl.utilities.seed.seed_everything(seed=2022)
@@ -227,7 +233,6 @@ if __name__ == '__main__':
     gtss = GroupTimeSeriesSplit(n_folds=1, holdout_size=100, groups=df['time_id'])
 
     for fold, (train_indexes, val_indexes) in enumerate(gtss.split(df)):
-
         scores_valid, scores_train = list(), list()
 
         train_data = df.iloc[train_indexes].sort_values(by=['time_id'])
@@ -237,7 +242,7 @@ if __name__ == '__main__':
             monitor="fold-{}/valid/epoch/pearson".format(fold),
             dirpath="models",
             filename="fold-" + str(fold) + "-ubiquant-mlp-{epoch:02d}-{val_loss:.2f}",
-            save_top_k=3,
+            save_top_k=15,
             mode="max",
         )
 
@@ -247,7 +252,7 @@ if __name__ == '__main__':
                               emb_dims=[245, 238, 230],
                               emb_output=56,
                               l_rate=0.00026840511349794486,
-                              categorical=True)
+                              categorical=False)
 
         print(model)
 
@@ -260,4 +265,6 @@ if __name__ == '__main__':
 
 oof_pearson_coef = pd.concat(oof).groupby(['time_id']).apply(pearson_coef)
 neptune_logger.experiment['pearson_timeid'].log(oof_pearson_coef.values.tolist())
+coef = np.mean(oof_pearson_coef)
+neptune_logger.experiment['pearson_coeff'].log(coef)
 print('oof score pearson coef per time id: ', np.mean(oof_pearson_coef))
